@@ -202,7 +202,7 @@ fastify.register(async (fastify) => {
                         {
                             type: "function",
                             name: "question_and_answer",
-                            description: "Get answers to customer questions about automotive services and repairs",
+                            description: "Get answers to customer questions about calley ai and how it qualifies the lead using ai cold calling.",
                             parameters: {
                                 type: "object",
                                 properties: {
@@ -214,7 +214,7 @@ fastify.register(async (fastify) => {
                         {
                             type: "function",
                             name: "book_tow",
-                            description: "Book a tow service for a customer",
+                            description: "Book a meeting with the customer",
                             parameters: {
                                 type: "object",
                                 properties: {
@@ -507,3 +507,5 @@ fastify.listen({ port: PORT }, (err) => {
 
 // The logic is :
 // In first route it will use phone number as a unique identifier to look for the past conversation or the history. If present then it will send the convo to gpt assistant to generate a proper first message for greeting the user.  
+
+// Route 1 is for the calling history i.e if the same person had a conversation with us before then it will just send the convo to gpt assistant to generate a proper first message for greeting the user.
