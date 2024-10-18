@@ -2,18 +2,12 @@ import os
 import requests
 import threading
 from flask import Flask, request, jsonify
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
 from twilio.rest import Client
 from twilio.base.exceptions import TwilioRestException
 
 app = Flask(__name__)
 
-# Set up Google Sheets API credentials (update your credentials path)
-SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
-creds = Credentials.from_authorized_user_file('path/to/your/credentials.json', SCOPES)
-
-# Set up Twilio credentials from.env file
+# Set up Twilio credentials from environment variables
 account_sid = os.environ['TWILIO_ACCOUNT_SID']
 auth_token = os.environ['TWILIO_AUTH_TOKEN']
 twilio_phone_number = os.environ['TWILIO_PHONE_NUMBER']
@@ -29,7 +23,7 @@ def start_call():
     """Webhook to start the call from Make.com Route 1."""
     data = request.json
     to_number = data.get('phone_number')
-    row_number = data.get('row')  # Row number for updating the sheet
+    row_number = data.get('row')  # Row number for updating the sheet via Make.com
 
     if to_number:
         call_sid = make_call(to_number, row_number)
@@ -64,10 +58,10 @@ def twilio_status_callback():
     call_status = request.form.get('CallStatus')
     row_number = request.args.get('row')  # Pass the row number through the webhook
 
-    # Log status and send it to Make.com webhook to update the sheet
+    # Log status
     print(f"Call {call_sid} status: {call_status}")
 
-    # Optionally forward the status to Make.com using its webhook
+    # Forward the status to Make.com using its webhook
     make_webhook_url = "https://hook.us2.make.com/yc1rmnaqz8dxdeadgifdkagh4pfejtsk"
     payload = {
         'row': row_number,
@@ -85,4 +79,3 @@ def run_flask_server():
 if __name__ == '__main__':
     # Start Flask app in a new thread to handle webhooks
     threading.Thread(target=run_flask_server).start()
-
