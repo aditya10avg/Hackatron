@@ -1,72 +1,88 @@
+import os
 import requests
-import json
-from openpyxl import load_workbook
+import threading
+from flask import Flask, request, jsonify
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from twilio.rest import Client
+from twilio.base.exceptions import TwilioRestException
 
-# Function to read phone numbers from Excel file
-def read_phone_numbers_from_excel(file_path):
-    workbook = load_workbook(filename=file_path)
-    sheet = workbook.active
-    data = []
-    for row in sheet.iter_rows(min_row=2, values_only=True):  # Assuming the first row is the header
-        data.append({'phoneNumber': row[0], 'Response': row[1]})
-    return data, workbook, sheet
+app = Flask(__name__)
 
-# Function to update the Excel sheet with response status
-def update_excel_sheet(workbook, sheet, data):
-    for idx, row in enumerate(data, start=2):  # Start from the second row
-        sheet.cell(row=idx, column=2, value=row['Response'])
-    workbook.save('path/to/excel/file.xlsx')
+# Set up Google Sheets API credentials (update your credentials path)
+SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
+creds = Credentials.from_authorized_user_file('path/to/your/credentials.json', SCOPES)
 
-# Function to make outbound calls and process responses
-def make_outbound_calls(file_path):
-    data, workbook, sheet = read_phone_numbers_from_excel(file_path)
+# Set up Twilio credentials from.env file
+account_sid = os.environ['TWILIO_ACCOUNT_SID']
+auth_token = os.environ['TWILIO_AUTH_TOKEN']
+twilio_phone_number = os.environ['TWILIO_PHONE_NUMBER']
 
-    for row in data:
-        caller_number = row['Phone Number']
-        try:
-            response = requests.post(
-                'https://example.com/webhook',
-                headers={'Content-Type': 'application/json'},
-                data=json.dumps({
-                    'route': "1",  # Route 1 is for getting the first message
-                    'data1': caller_number,  # Send caller's number, this will actually find about the past conversation with that number.
-                    'data2': "empty"  # Extra data (not used here) but we can add about that person like personality, current work for personalization.
-                })
-            )
+# Initialize Twilio client
+twilio_client = Client(account_sid, auth_token)
 
-            if response.ok:
-                response_text = response.text  # Get the text response from the make.com webhook
-                print('Make.com webhook response:', response_text)
-                try:
-                    response_data = response.json()  # Try to parse the response from webhook as JSON
-                    if response_data and 'firstMessage' in response_data:
-                        first_message = response_data['firstMessage']  # If there's a firstMessage in the response, use it
-                        print('Parsed firstMessage from Make.com:', first_message)
-                    else:
-                        first_message = response_text.strip()  # Use the plain text response if parsing fails
-                except json.JSONDecodeError as parse_error:
-                    print('Error parsing webhook response:', parse_error)  # Log any errors while parsing the response
-                    first_message = response_text.strip()  # Use the plain text response if parsing fails
-            else:
-                print('Failed to send data to Make.com webhook:', response.status_code, response.reason)  # Log if webhook fails
-                row['Response'] = 'No answer'
-        except requests.RequestException as error:
-            print('Error sending data to Make.com webhook:', error)  # Log if an error occurs in the request
-            row['Response'] = 'Error'
+call_status_map = {}  # To store the status of ongoing calls
 
-        # Set up a new session for this call
-        session = {
-            'transcript': '',  # Store the conversation transcript here
-            'streamSid': None  # This will be set when the media stream starts
-        }
+# Route 1: Webhook to start calls, triggered by Make.com
+@app.route('/start_call', methods=['POST'])
+def start_call():
+    """Webhook to start the call from Make.com Route 1."""
+    data = request.json
+    to_number = data.get('phone_number')
+    row_number = data.get('row')  # Row number for updating the sheet
 
-    # Update the Excel sheet with response status
-    update_excel_sheet(workbook, sheet, data)
+    if to_number:
+        call_sid = make_call(to_number, row_number)
+        if call_sid:
+            return jsonify({"status": "Call initiated", "call_sid": call_sid}), 200
+        else:
+            return jsonify({"status": "Failed to initiate call"}), 500
+    return jsonify({"status": "Invalid request"}), 400
 
-# Main function
-def main():
-    file_path = 'path/to/excel/file.xlsx'
-    make_outbound_calls(file_path)
+def make_call(to_number, row_number):
+    """Make a call using Twilio to the specified number."""
+    try:
+        call = twilio_client.calls.create(
+            to=to_number,
+            from_=twilio_phone_number,
+            url="http://demo.twilio.com/docs/voice.xml",  # Replace with your TwiML URL
+            status_callback=f'http://your-server-domain/twilio_status_callback?row={row_number}',  # Callback with row info
+            status_callback_method='POST'
+        )
+        print(f"Call initiated to {to_number}. Call SID: {call.sid}")
+        call_status_map[call.sid] = {'to': to_number, 'row': row_number, 'status': 'initiated'}
+        return call.sid
+    except TwilioRestException as e:
+        print(f"Error making call to {to_number}: {str(e)}")
+        return None
+
+# Route 2: Webhook to receive status updates from Twilio
+@app.route('/twilio_status_callback', methods=['POST'])
+def twilio_status_callback():
+    """Twilio status callback route for Make.com Route 2."""
+    call_sid = request.form.get('CallSid')
+    call_status = request.form.get('CallStatus')
+    row_number = request.args.get('row')  # Pass the row number through the webhook
+
+    # Log status and send it to Make.com webhook to update the sheet
+    print(f"Call {call_sid} status: {call_status}")
+
+    # Optionally forward the status to Make.com using its webhook
+    make_webhook_url = "https://hook.us2.make.com/yc1rmnaqz8dxdeadgifdkagh4pfejtsk"
+    payload = {
+        'row': row_number,
+        'call_sid': call_sid,
+        'call_status': call_status
+    }
+    requests.post(make_webhook_url, json=payload)
+
+    return 'OK', 200
+
+# Flask server to handle webhooks
+def run_flask_server():
+    app.run(debug=False, use_reloader=False)
 
 if __name__ == '__main__':
-    main()
+    # Start Flask app in a new thread to handle webhooks
+    threading.Thread(target=run_flask_server).start()
+
