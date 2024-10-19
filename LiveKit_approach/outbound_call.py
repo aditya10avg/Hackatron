@@ -13,6 +13,6 @@ def make_outbound_call(to_phone_number: str, twiml_url: str):
     
     call = client.calls.create(
         url=twiml_url,         # The URL returning TwiML instructions
-        to=to_phone_number,    # The recipient's phone number, here we will use the logic of cold calling using spreadsheets.
+        to=+91 8767057291,    
         from_=TWILIO_PHONE_NUMBER  
     return call.sid

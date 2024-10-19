@@ -15,7 +15,7 @@ async def entrypoint_with_outbound_call(ctx: agents.JobContext):
     print("Starting an outbound call...")
     call_sid = make_outbound_call(
         to_phone_number='+1234567890',  # Replace with the recipient's phone number
-        twiml_url='https://your-ngrok-url.com/twiml'  # Run the server.py and connect it to ngrok but remember adding livekit url to the server.py file.
+        twiml_url='https://8cce-14-139-240-252.ngrok-free.app/twiml'  # Run the server.py and connect it to ngrok but remember adding livekit url to the server.py file.
     )
     print(f"Outbound call started with SID: {call_sid}")
 
