@@ -8,9 +8,9 @@ from twilio.base.exceptions import TwilioRestException
 app = Flask(__name__)
 
 # Set up Twilio credentials from environment variables
-account_sid = os.environ['TWILIO_ACCOUNT_SID']
-auth_token = os.environ['TWILIO_AUTH_TOKEN']
-twilio_phone_number = os.environ['TWILIO_PHONE_NUMBER']
+account_sid = os.getenv('TWILIO_ACCOUNT_SID')
+auth_token = os.getenv('TWILIO_AUTH_TOKEN')
+twilio_phone_number = os.getenv('TWILIO_PHONE_NUMBER')
 
 # Initialize Twilio client
 twilio_client = Client(account_sid, auth_token)
