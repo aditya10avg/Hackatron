@@ -1,81 +1,84 @@
 import os
-import requests
-import threading
-from flask import Flask, request, jsonify
+import time
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from twilio.rest import Client
 from twilio.base.exceptions import TwilioRestException
 
-app = Flask(__name__)
+# Configuration
+TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID')
+TWILIO_AUTH_TOKEN = os.environ.get('TWILIO_AUTH_TOKEN')
+TWILIO_PHONE_NUMBER = os.environ.get('TWILIO_PHONE_NUMBER')
+TWIML_URL = 'https://c3f3-14-139-240-252.ngrok-free.app/outbound-call'
+WAIT_TIME = 10  # Time to wait between calls
 
-# Set up Twilio credentials from environment variables
-account_sid = os.getenv('TWILIO_ACCOUNT_SID')
-auth_token = os.getenv('TWILIO_AUTH_TOKEN')
-twilio_phone_number = os.getenv('TWILIO_PHONE_NUMBER')
+app = FastAPI()
 
-# Initialize Twilio client
-twilio_client = Client(account_sid, auth_token)
+# Twilio Client
+twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
-call_status_map = {}  # To store the status of ongoing calls
-
-# Route 1: Webhook to start calls, triggered by Make.com
-@app.route('/start_call', methods=['POST'])
-def start_call():
-    """Webhook to start the call from Make.com Route 1."""
-    data = request.json
-    to_number = data.get('phone_number')
-    row_number = data.get('row')  # Row number for updating the sheet via Make.com
-
-    if to_number:
-        call_sid = make_call(to_number, row_number)
-        if call_sid:
-            return jsonify({"status": "Call initiated", "call_sid": call_sid}), 200
-        else:
-            return jsonify({"status": "Failed to initiate call"}), 500
-    return jsonify({"status": "Invalid request"}), 400
-
-def make_call(to_number, row_number):
-    """Make a call using Twilio to the specified number."""
+# Function to make a call
+def make_call(to_number):
     try:
         call = twilio_client.calls.create(
             to=to_number,
-            from_=twilio_phone_number,
-            url="http://demo.twilio.com/docs/voice.xml",  # Replace with your TwiML URL
-            status_callback=f'http://your-server-domain/twilio_status_callback?row={row_number}',  # Callback with row info
+            from_=TWILIO_PHONE_NUMBER,
+            url=TWIML_URL,
+            status_callback='https://your-callback-url.com/status',  # This URL should point to your callback handler
+            status_callback_event=['completed', 'failed', 'no-answer', 'busy'],
             status_callback_method='POST'
         )
-        print(f"Call initiated to {to_number}. Call SID: {call.sid}")
-        call_status_map[call.sid] = {'to': to_number, 'row': row_number, 'status': 'initiated'}
+        print(f"Initiated call to {to_number}, Call SID: {call.sid}")
         return call.sid
+        
     except TwilioRestException as e:
         print(f"Error making call to {to_number}: {str(e)}")
         return None
 
-# Route 2: Webhook to receive status updates from Twilio
-@app.route('/twilio_status_callback', methods=['POST'])
-def twilio_status_callback():
-    """Twilio status callback route for Make.com Route 2."""
-    call_sid = request.form.get('CallSid')
-    call_status = request.form.get('CallStatus')
-    row_number = request.args.get('row')  # Pass the row number through the webhook
+# Function to update call status (you can enhance this to update Google Sheets or a database)
+def update_call_status(phone_number, status):
+    print(f"Updated status for {phone_number}: {status}")
 
-    # Log status
-    print(f"Call {call_sid} status: {call_status}")
+@app.post("/webhook")
+async def webhook(request: Request):
+    try:
+        data = await request.json()
+        phone_numbers = data.get("phone_numbers", [])
+        
+        for phone_number in phone_numbers:
+            print(f"Processing phone number: {phone_number}")
+            call_sid = make_call(phone_number)
+            
+            if call_sid:
+                print(f"Call initiated successfully to {phone_number}. Call SID: {call_sid}")
 
-    # Forward the status to Make.com using its webhook
-    make_webhook_url = "https://hook.us2.make.com/yc1rmnaqz8dxdeadgifdkagh4pfejtsk"
-    payload = {
-        'row': row_number,
-        'call_sid': call_sid,
-        'call_status': call_status
-    }
-    requests.post(make_webhook_url, json=payload)
+                # Wait for the call to complete or fail
+                while True:
+                    call = twilio_client.calls(call_sid).fetch()
+                    status = call.status
 
-    return 'OK', 200
+                    # Update status based on the call result
+                    update_call_status(phone_number, status)
 
-# Flask server to handle webhooks
-def run_flask_server():
-    app.run(debug=False, use_reloader=False)
+                    if status in ['completed', 'failed', 'no-answer', 'busy']:
+                        break
+                    
+                    # Wait before checking the status again
+                    time.sleep(5)  # Check every 5 seconds
+                
+            else:
+                print(f"Failed to initiate call to {phone_number}")
+            
+            # Wait for the specified time before the next call
+            print(f"Waiting {WAIT_TIME} seconds before the next call...")
+            time.sleep(WAIT_TIME)
 
-if __name__ == '__main__':
-    # Start Flask app in a new thread to handle webhooks
-    threading.Thread(target=run_flask_server).start()
+        return JSONResponse(content={"message": "Calls initiated."}, status_code=200)
+    
+    except Exception as e:
+        print(f"Error processing webhook: {str(e)}")
+        raise HTTPException(status_code=400, detail="Invalid request data")
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
